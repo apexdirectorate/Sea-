@@ -1,17 +1,13 @@
 /**
- * Cloudflare Pages Function for Turnstile verification and email delivery
- * Handles contact form submissions with bot protection and email forwarding
+ * Cloudflare Pages Function for Turnstile verification and Web3Forms email delivery
+ * Handles contact form submissions with bot protection and email forwarding via Web3Forms
  */
 
 const TURNSTILE_SECRET = '0x4AAAAAAFNxTXac0nIiQoTgzgnrP1hcD4';
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+const WEB3FORMS_API_URL = 'https://api.web3forms.com/submit';
+const WEB3FORMS_ACCESS_KEY = '71734b95-1c21-476e-aebb-5b83ff840ae1';
 const RECIPIENT_EMAIL = 'apexdirectorate@gmail.com';
-
-// Use environment variables for API keys
-// Set these in your Cloudflare Pages project settings:
-// - RESEND_API_KEY (for Resend)
-// - or SENDGRID_API_KEY (for SendGrid)
-// - or WEB3FORMS_ACCESS_KEY (for Web3Forms)
 
 export async function onRequest(context) {
   // Only accept POST requests
@@ -69,6 +65,7 @@ export async function onRequest(context) {
     }
 
     // Step 1: Verify Turnstile token
+    console.log('Verifying Turnstile token...');
     const verifyPayload = new URLSearchParams({
       secret: TURNSTILE_SECRET,
       response: token,
@@ -86,6 +83,7 @@ export async function onRequest(context) {
     const verifyResult = await verifyResponse.json();
 
     if (!verifyResult.success) {
+      console.error('Turnstile verification failed:', verifyResult['error-codes']);
       return new Response(
         JSON.stringify({
           success: false,
@@ -102,10 +100,13 @@ export async function onRequest(context) {
       );
     }
 
-    // Step 2: Send email after verification
-    const emailSent = await sendContactEmail(name, email, message, context.env);
+    console.log('Turnstile verification successful. Sending email via Web3Forms...');
+
+    // Step 2: Send email via Web3Forms after verification
+    const emailSent = await sendViaWeb3Forms(name, email, message);
 
     if (!emailSent) {
+      console.error('Web3Forms email delivery failed');
       return new Response(
         JSON.stringify({
           success: false,
@@ -121,11 +122,13 @@ export async function onRequest(context) {
       );
     }
 
+    console.log('Email sent successfully via Web3Forms');
+
     // Step 3: Return success
     return new Response(
       JSON.stringify({
         success: true,
-        message: 'Contact form received. Email will be sent shortly.'
+        message: 'Thank you! Your message has been sent successfully.'
       }),
       {
         status: 200,
@@ -151,180 +154,49 @@ export async function onRequest(context) {
 }
 
 /**
- * Send email using available service
- * Tries Resend first, then SendGrid, then Web3Forms
- */
-async function sendContactEmail(name, email, message, env) {
-  try {
-    // Try Resend first (recommended)
-    if (env.RESEND_API_KEY) {
-      return await sendViaResend(name, email, message, env.RESEND_API_KEY);
-    }
-
-    // Try SendGrid second
-    if (env.SENDGRID_API_KEY) {
-      return await sendViaSendGrid(name, email, message, env.SENDGRID_API_KEY);
-    }
-
-    // Try Web3Forms third
-    if (env.WEB3FORMS_ACCESS_KEY) {
-      return await sendViaWeb3Forms(name, email, message, env.WEB3FORMS_ACCESS_KEY);
-    }
-
-    // If no email service is configured, log and return error
-    console.error('No email service configured. Set RESEND_API_KEY, SENDGRID_API_KEY, or WEB3FORMS_ACCESS_KEY');
-    return false;
-  } catch (error) {
-    console.error('Email sending error:', error);
-    return false;
-  }
-}
-
-/**
- * Send email via Resend
- * https://resend.com/docs/api-reference/emails/send
- */
-async function sendViaResend(name, email, message, apiKey) {
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        from: 'noreply@apexdirectorate.com',
-        to: RECIPIENT_EMAIL,
-        subject: `New Contact Form Submission from ${name}`,
-        html: `
-          <h2>New Contact Form Submission</h2>
-          <p><strong>Name:</strong> ${escapeHtml(name)}</p>
-          <p><strong>Email:</strong> ${escapeHtml(email)}</p>
-          <p><strong>Message:</strong></p>
-          <p>${escapeHtml(message).replace(/\n/g, '<br>')}</p>
-          <hr>
-          <p style="color: #666; font-size: 12px;">Submitted via Apex Directorate contact form</p>
-        `,
-        reply_to: email
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Resend API error:', error);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error('Resend error:', error);
-    return false;
-  }
-}
-
-/**
- * Send email via SendGrid
- * https://docs.sendgrid.com/api-reference/mail-send/mail-send
- */
-async function sendViaSendGrid(name, email, message, apiKey) {
-  try {
-    const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        personalizations: [
-          {
-            to: [{ email: RECIPIENT_EMAIL }],
-            subject: `New Contact Form Submission from ${name}`
-          }
-        ],
-        from: {
-          email: 'noreply@apexdirectorate.com',
-          name: 'Apex Directorate'
-        },
-        reply_to: {
-          email: email,
-          name: name
-        },
-        content: [
-          {
-            type: 'text/html',
-            value: `
-              <h2>New Contact Form Submission</h2>
-              <p><strong>Name:</strong> ${escapeHtml(name)}</p>
-              <p><strong>Email:</strong> ${escapeHtml(email)}</p>
-              <p><strong>Message:</strong></p>
-              <p>${escapeHtml(message).replace(/\n/g, '<br>')}</p>
-              <hr>
-              <p style="color: #666; font-size: 12px;">Submitted via Apex Directorate contact form</p>
-            `
-          }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('SendGrid API error:', error);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error('SendGrid error:', error);
-    return false;
-  }
-}
-
-/**
  * Send email via Web3Forms
  * https://web3forms.com/documentation
  */
-async function sendViaWeb3Forms(name, email, message, accessKey) {
+async function sendViaWeb3Forms(name, email, message) {
   try {
-    const response = await fetch('https://api.web3forms.com/submit', {
+    const payload = {
+      access_key: WEB3FORMS_ACCESS_KEY,
+      name: name,
+      email: email,
+      message: message,
+      subject: `New Contact Form Submission from ${name}`,
+      from_name: 'Apex Directorate Contact Form',
+      to_email: RECIPIENT_EMAIL
+    };
+
+    console.log('Sending to Web3Forms with payload:', { ...payload, access_key: '***' });
+
+    const response = await fetch(WEB3FORMS_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        access_key: accessKey,
-        name: name,
-        email: email,
-        message: message,
-        from_name: 'Apex Directorate Contact Form',
-        subject: `New Contact Form Submission from ${name}`,
-        redirect: false
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error('Web3Forms API error:', error);
+      const errorText = await response.text();
+      console.error('Web3Forms HTTP error:', response.status, errorText);
       return false;
     }
 
     const result = await response.json();
-    return result.success === true;
+    console.log('Web3Forms response:', result);
+
+    // Web3Forms returns success: true when email is sent
+    if (result.success === true) {
+      return true;
+    }
+
+    console.error('Web3Forms returned success: false', result);
+    return false;
   } catch (error) {
     console.error('Web3Forms error:', error);
     return false;
   }
-}
-
-/**
- * Escape HTML special characters
- */
-function escapeHtml(text) {
-  const map = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;'
-  };
-  return text.replace(/[&<>"']/g, m => map[m]);
 }
